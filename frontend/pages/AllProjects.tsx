@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useUser, useClerk } from '@clerk/clerk-react';
+import { useAuth, useUser, useClerk } from '@clerk/clerk-react';
+import { makeApi, type Project } from '../lib/api';
 import {
   ChevronDown, Gift, Zap, LogOut,
   Search, MoreHorizontal, Plus, LayoutGrid, List, Check, Info, Star,
@@ -83,19 +84,15 @@ const ProjectItem = ({ label }: { label: string }) => (
   </button>
 );
 
-/* ─── Projects data ─── */
-const initialActiveProjects = [
-  { id: 1, title: 'Stream Box', edited: 'Edited 43 minutes ago', createdAt: '18 hours ago', creator: 'Think', image: 'https://images.unsplash.com/photo-1616530940355-351fabd9524b?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-];
-const initialInactiveProjects = [
-  { id: 2, title: 'ClueMaster Game', edited: 'Edited 15 Jan 2026', createdAt: '4 Jan 2026', creator: 'Think', image: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 3, title: 'Your Next Marketplace', edited: 'Edited 8 Jan 2026', createdAt: '29 Dec 2025', creator: 'Think', image: 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 4, title: 'Dynamic Page Clone', edited: 'Edited 8 Jan 2026', createdAt: '7 Jan 2026', creator: 'Think', image: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 5, title: 'Your Personal Search Engine', edited: 'Edited 4 Jan 2026', createdAt: '4 Jan 2026', creator: 'Think', image: 'https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 6, title: 'Your Next Binge', edited: 'Edited 4 Jan 2026', createdAt: '4 Jan 2026', creator: 'Think', image: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 7, title: 'N Intro Stream', edited: 'Edited 1 Jan 2026', createdAt: '1 Jan 2026', creator: 'Think', image: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-  { id: 8, title: 'Project Make It', edited: 'Edited 24 Nov 2025', createdAt: '24 Nov 2025', creator: 'Think', image: 'https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?q=80&w=800&auto=format&fit=crop', avatar: 'T', avatarColor: 'bg-[#659b4a]' },
-];
+/* ─── Helpers ─── */
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 /* ─── Dropdown helpers ─── */
 const SortDropdown = () => {
@@ -264,21 +261,30 @@ export default function AllProjects() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
-  const [starredProjects, setStarredProjects] = useState<number[]>([]);
-  const [activeProjects, setActiveProjects] = useState(initialActiveProjects);
-  const [inactiveProjects, setInactiveProjects] = useState(initialInactiveProjects);
+  const { getToken } = useAuth();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const firstName = user?.firstName || user?.username || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'there';
   const initials = (user?.firstName?.[0] || user?.emailAddresses?.[0]?.emailAddress?.[0] || 'U').toUpperCase();
+  const creatorName = user?.fullName || user?.firstName || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'You';
 
-  const toggleStar = (id: number) => setStarredProjects(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
-  const handleRename = (id: number, newTitle: string) => {
-    setActiveProjects(prev => prev.map(p => p.id === id ? { ...p, title: newTitle } : p));
-    setInactiveProjects(prev => prev.map(p => p.id === id ? { ...p, title: newTitle } : p));
+  const toggleStar = async (id: string) => {
+    const api = makeApi(() => getToken());
+    try {
+      const updated = await api.projects.toggleStar(id);
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, is_starred: updated.is_starred } : p));
+    } catch { /* ignore */ }
+  };
+  const handleRename = (id: string, newTitle: string) => {
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, name: newTitle } : p));
   };
 
-  const filteredActive = activeProjects.filter(p => p.title.toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredInactive = inactiveProjects.filter(p => p.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  const ACTIVE_MS = 14 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const filtered = projects.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredActive = filtered.filter(p => now - new Date(p.updated_at).getTime() <= ACTIVE_MS);
+  const filteredInactive = filtered.filter(p => now - new Date(p.updated_at).getTime() > ACTIVE_MS);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -289,8 +295,18 @@ export default function AllProjects() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
+  useEffect(() => {
+    if (!isSignedIn) return;
+    const api = makeApi(() => getToken());
+    api.projects.list()
+      .then(data => setProjects(data))
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
+  }, [isSignedIn]);
+
   if (!isLoaded) return <div className="min-h-screen bg-[#171717] flex items-center justify-center"><div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" /></div>;
   if (!isSignedIn) return <Navigate to="/login" replace />;
+  if (isLoading) return <div className="min-h-screen bg-[#171717] flex items-center justify-center"><div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" /></div>;
 
   return (
     <div className="flex h-screen bg-[#171717] text-white font-sans overflow-hidden">
@@ -441,18 +457,19 @@ export default function AllProjects() {
                 <div className="absolute inset-0 rounded-2xl border border-white/5 bg-white/[0.015]"
                   style={{ transform: 'rotateY(-15deg) rotateX(8deg) translateZ(-24px) translateX(12px) translateY(8px)' }} />
               </div>
-              <h2 className="text-[#f4f4f5] text-[24px] font-semibold text-center leading-[1.3] tracking-tight mb-3">
-                No projects match your search
-              </h2>
-              <p className="text-[#71717a] text-[14px] text-center mb-8">
-                Try a different search term or clear the filter.
-              </p>
-              <button
-                onClick={() => setSearchQuery('')}
-                className="px-4 py-2 bg-transparent border border-[#3f3f46] rounded-lg text-sm font-medium text-[#e4e4e7] hover:bg-[#27272a] hover:text-white transition-all duration-200 shadow-sm"
-              >
-                Clear search
-              </button>
+              {searchQuery ? (
+                <>
+                  <h2 className="text-[#f4f4f5] text-[24px] font-semibold text-center leading-[1.3] tracking-tight mb-3">No projects match your search</h2>
+                  <p className="text-[#71717a] text-[14px] text-center mb-8">Try a different search term or clear the filter.</p>
+                  <button onClick={() => setSearchQuery('')} className="px-4 py-2 bg-transparent border border-[#3f3f46] rounded-lg text-sm font-medium text-[#e4e4e7] hover:bg-[#27272a] hover:text-white transition-all duration-200 shadow-sm">Clear search</button>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-[#f4f4f5] text-[24px] font-semibold text-center leading-[1.3] tracking-tight mb-3">No projects yet</h2>
+                  <p className="text-[#71717a] text-[14px] text-center mb-8">Go to the dashboard and describe what you want to build.</p>
+                  <button onClick={() => navigate('/dashboard')} className="px-4 py-2 bg-transparent border border-[#3f3f46] rounded-lg text-sm font-medium text-[#e4e4e7] hover:bg-[#27272a] hover:text-white transition-all duration-200 shadow-sm">Go to dashboard</button>
+                </>
+              )}
             </div>
           ) : viewMode === 'grid' ? (
             <>
@@ -465,14 +482,14 @@ export default function AllProjects() {
                     </div>
                     <h3 className="text-[#e0e0e0] font-medium text-[14px] px-1">Create new project</h3>
                   </div>
-                  {filteredActive.map(p => <ProjectCard key={p.id} {...p} isStarred={starredProjects.includes(p.id)} onToggleStar={toggleStar} onRename={handleRename} />)}
+                  {filteredActive.map(p => <ProjectCard key={p.id} id={p.id} title={p.name} edited={relativeTime(p.updated_at)} image={p.image_url ?? ''} avatar={initials} avatarColor="bg-orange-600" isStarred={p.is_starred} onToggleStar={toggleStar} onRename={handleRename} />)}
                 </div>
               </div>
               {filteredInactive.length > 0 && (
                 <div>
                   <h2 className="text-[13px] font-semibold text-[#a0a0a0] mb-4 tracking-wide">Inactive 60+ days</h2>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-8 gap-y-10">
-                    {filteredInactive.map(p => <ProjectCard key={p.id} {...p} isStarred={starredProjects.includes(p.id)} onToggleStar={toggleStar} onRename={handleRename} />)}
+                    {filteredInactive.map(p => <ProjectCard key={p.id} id={p.id} title={p.name} edited={relativeTime(p.updated_at)} image={p.image_url ?? ''} avatar={initials} avatarColor="bg-orange-600" isStarred={p.is_starred} onToggleStar={toggleStar} onRename={handleRename} />)}
                   </div>
                 </div>
               )}
@@ -485,14 +502,14 @@ export default function AllProjects() {
               <div className="mb-8">
                 <h2 className="text-[13px] font-semibold text-[#e0e0e0] mb-4 px-3 tracking-wide">Active in last 14 days</h2>
                 <div className="flex flex-col gap-2">
-                  {filteredActive.map(p => <ProjectListItem key={p.id} {...p} isStarred={starredProjects.includes(p.id)} onToggleStar={toggleStar} onRename={handleRename} />)}
+                  {filteredActive.map(p => <ProjectListItem key={p.id} id={p.id} title={p.name} edited={relativeTime(p.updated_at)} createdAt={relativeTime(p.created_at)} creator={creatorName} image={p.image_url ?? ''} avatar={initials} avatarColor="bg-orange-600" isStarred={p.is_starred} onToggleStar={toggleStar} />)}
                 </div>
               </div>
               {filteredInactive.length > 0 && (
                 <div>
                   <h2 className="text-[13px] font-semibold text-[#e0e0e0] mb-4 px-3 tracking-wide">Inactive 60+ days</h2>
                   <div className="flex flex-col gap-2">
-                    {filteredInactive.map(p => <ProjectListItem key={p.id} {...p} isStarred={starredProjects.includes(p.id)} onToggleStar={toggleStar} onRename={handleRename} />)}
+                    {filteredInactive.map(p => <ProjectListItem key={p.id} id={p.id} title={p.name} edited={relativeTime(p.updated_at)} createdAt={relativeTime(p.created_at)} creator={creatorName} image={p.image_url ?? ''} avatar={initials} avatarColor="bg-orange-600" isStarred={p.is_starred} onToggleStar={toggleStar} />)}
                   </div>
                 </div>
               )}

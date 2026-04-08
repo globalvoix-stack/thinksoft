@@ -1,61 +1,96 @@
 """
-Auth middleware — JWT verification via Better Auth (HS256).
+Auth middleware — Clerk JWT verification.
 
-Better Auth is JS-native; we verify HS256 tokens on the Python side
-using python-jose. The secret is better_auth_secret from settings.
+Clerk issues RS256-signed JWTs. We verify them using Clerk's JWKS endpoint,
+cached in memory with a 1-hour TTL to avoid hammering the endpoint.
 """
 from __future__ import annotations
 
+import time
+from typing import Any
 from uuid import UUID
 
+import httpx
 import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from config.constants import JWT_ALGORITHM
 from config.settings import get_settings
 
 log = structlog.get_logger(__name__)
 
 _bearer = HTTPBearer(auto_error=True)
 
+# Simple in-process JWKS cache
+_jwks_cache: dict[str, Any] = {}
+_jwks_fetched_at: float = 0.0
+_JWKS_TTL = 3600.0  # 1 hour
 
-def _decode_token(token: str) -> dict:
+
+async def _get_jwks() -> dict[str, Any]:
+    global _jwks_cache, _jwks_fetched_at
+    now = time.monotonic()
+    if _jwks_cache and (now - _jwks_fetched_at) < _JWKS_TTL:
+        return _jwks_cache
+
+    frontend_api = get_settings().clerk_frontend_api.rstrip("/")
+    url = f"{frontend_api}/.well-known/jwks.json"
+    log.info("auth.jwks.fetch", url=url)
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+
+    _jwks_cache = resp.json()
+    _jwks_fetched_at = now
+    log.info("auth.jwks.cached", key_count=len(_jwks_cache.get("keys", [])))
+    return _jwks_cache
+
+
+def _decode_token(token: str, jwks: dict[str, Any]) -> dict[str, Any]:
     from jose import JWTError, jwt  # type: ignore[import]
-    secret = get_settings().better_auth_secret
+    from jose.exceptions import ExpiredSignatureError
+
     try:
-        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        # Let python-jose select the key from the JWKS by `kid`
+        payload: dict[str, Any] = jwt.decode(
+            token,
+            jwks,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+        )
         return payload
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except JWTError as exc:
         log.warning("auth.jwt_invalid", error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
 
-def get_current_user(
+async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-) -> dict:
-    """FastAPI dependency — returns JWT payload dict for the authenticated user."""
-    return _decode_token(credentials.credentials)
+) -> dict[str, Any]:
+    """FastAPI dependency — returns Clerk JWT payload for the authenticated user."""
+    jwks = await _get_jwks()
+    return _decode_token(credentials.credentials, jwks)
 
 
-def get_current_user_id(
-    payload: dict = Depends(get_current_user),
-) -> UUID:
-    """FastAPI dependency — returns the UUID user ID from the JWT payload."""
-    sub = payload.get("sub") or payload.get("userId") or payload.get("user_id")
+async def get_current_user_id(
+    payload: dict[str, Any] = Depends(get_current_user),
+) -> str:
+    """FastAPI dependency — returns the Clerk user ID string (e.g. 'user_2abc...')."""
+    sub = payload.get("sub")
     if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token missing user identifier",
+            detail="Token missing user identifier (sub)",
         )
-    try:
-        return UUID(str(sub))
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user identifier in token",
-        )
+    return str(sub)

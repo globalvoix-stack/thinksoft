@@ -13,6 +13,7 @@ import AllProjects from './pages/AllProjects';
 import Starred from './pages/Starred';
 import CreatedByMe from './pages/CreatedByMe';
 import SharedWithMe from './pages/SharedWithMe';
+import ProjectView from './pages/ProjectView';
 import { ChevronDown, Plus, Map, Mic, ArrowUp, Users, Database, HardDrive, Bell, Zap, Globe, Shield, Lock, ShieldAlert, ArrowRightLeft, CheckCircle2, Activity, FileText } from 'lucide-react';
 import { motion } from 'motion/react';
 // @ts-ignore
@@ -626,6 +627,7 @@ export default function App() {
         <Route path="/starred" element={<Starred />} />
         <Route path="/created-by-me" element={<CreatedByMe />} />
         <Route path="/shared-with-me" element={<SharedWithMe />} />
+        <Route path="/projects/:id" element={<ProjectView />} />
         <Route path="/sso-callback" element={<SSOCallback />} />
       </Routes>
     </BrowserRouter>

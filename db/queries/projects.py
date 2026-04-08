@@ -14,12 +14,15 @@ import asyncpg
 class Project:
     id: UUID
     user_id: UUID
+    clerk_user_id: str | None
     name: str
     description: str | None
     industry: str | None
     mode: str
     design_tokens: dict[str, Any]
     component_registry: dict[str, Any]
+    is_starred: bool
+    image_url: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -35,17 +38,19 @@ async def create_project(
     conn: asyncpg.Connection,
     user_id: UUID,
     name: str,
-    industry: str | None,
+    industry: str | None = None,
     mode: str = "autonomous",
     description: str | None = None,
+    clerk_user_id: str | None = None,
+    image_url: str | None = None,
 ) -> Project:
     row = await conn.fetchrow(
         """
-        INSERT INTO projects (user_id, name, description, industry, mode)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO projects (user_id, clerk_user_id, name, description, industry, mode, image_url)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
         """,
-        user_id, name, description, industry, mode,
+        user_id, clerk_user_id, name, description, industry, mode, image_url,
     )
     return _row(row)
 
@@ -60,6 +65,16 @@ async def get_project(
     return _row(row) if row else None
 
 
+async def get_project_by_clerk_user(
+    conn: asyncpg.Connection, project_id: UUID, clerk_user_id: str
+) -> Project | None:
+    row = await conn.fetchrow(
+        "SELECT * FROM projects WHERE id = $1 AND clerk_user_id = $2",
+        project_id, clerk_user_id,
+    )
+    return _row(row) if row else None
+
+
 async def get_project_by_id(
     conn: asyncpg.Connection, project_id: UUID
 ) -> Project | None:
@@ -67,14 +82,38 @@ async def get_project_by_id(
     return _row(row) if row else None
 
 
+async def list_projects_by_clerk_user(
+    conn: asyncpg.Connection, clerk_user_id: str
+) -> list[Project]:
+    rows = await conn.fetch(
+        "SELECT * FROM projects WHERE clerk_user_id = $1 ORDER BY updated_at DESC",
+        clerk_user_id,
+    )
+    return [_row(r) for r in rows]
+
+
 async def list_projects(
     conn: asyncpg.Connection, user_id: UUID
 ) -> list[Project]:
     rows = await conn.fetch(
-        "SELECT * FROM projects WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM projects WHERE user_id = $1 ORDER BY updated_at DESC",
         user_id,
     )
     return [_row(r) for r in rows]
+
+
+async def set_starred(
+    conn: asyncpg.Connection, project_id: UUID, clerk_user_id: str, starred: bool
+) -> Project | None:
+    row = await conn.fetchrow(
+        """
+        UPDATE projects SET is_starred = $1
+        WHERE id = $2 AND clerk_user_id = $3
+        RETURNING *
+        """,
+        starred, project_id, clerk_user_id,
+    )
+    return _row(row) if row else None
 
 
 async def update_project_mode(
@@ -103,5 +142,11 @@ async def update_component_registry(
     )
 
 
-async def delete_project(conn: asyncpg.Connection, project_id: UUID) -> None:
-    await conn.execute("DELETE FROM projects WHERE id = $1", project_id)
+async def delete_project(
+    conn: asyncpg.Connection, project_id: UUID, clerk_user_id: str
+) -> bool:
+    result = await conn.execute(
+        "DELETE FROM projects WHERE id = $1 AND clerk_user_id = $2",
+        project_id, clerk_user_id,
+    )
+    return int(result.split()[-1]) > 0

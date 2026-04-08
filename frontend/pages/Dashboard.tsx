@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useUser, useClerk } from '@clerk/clerk-react';
+import { useAuth, useUser, useClerk } from '@clerk/clerk-react';
+import { makeApi } from '../lib/api';
 import {
   ChevronDown,
   Gift,
@@ -145,8 +146,39 @@ export default function Dashboard() {
   const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  const { getToken } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+
   const firstName = user?.firstName || user?.username || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'there';
   const initials = (user?.firstName?.[0] || user?.emailAddresses?.[0]?.emailAddress?.[0] || 'U').toUpperCase();
+
+  const handleSubmit = async () => {
+    const prompt = promptValue.trim();
+    if (!prompt || isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      const api = makeApi(() => getToken());
+      // Create project named after the first 60 chars of the prompt
+      const project = await api.projects.create({
+        name: prompt.slice(0, 60),
+        mode: 'max',
+      });
+      // Kick off generation (first prompt → always Max)
+      const gen = await api.generate({
+        project_id: project.id,
+        prompt,
+        mode: 'max',
+        is_first_prompt: true,
+      });
+      // Navigate to the project view with the job ID for SSE streaming
+      navigate(`/projects/${project.id}?job_id=${gen.job_id}`);
+    } catch (err: any) {
+      setSubmitError(err.message || 'Something went wrong');
+      setIsSubmitting(false);
+    }
+  };
 
   const startAudioMeter = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -480,11 +512,21 @@ export default function Dashboard() {
                               <Mic size={16} strokeWidth={1.75} />
                             </button>
                           </Tooltip>
-                          <button className={`${promptValue.trim().length > 0 ? 'bg-white text-black hover:bg-neutral-200' : 'bg-[#737373] text-[#1a1a1a] hover:bg-[#888888]'} w-9 h-9 flex items-center justify-center rounded-full transition-colors ml-1`}>
-                            <ArrowUp size={18} strokeWidth={2} />
+                          <button
+                            onClick={handleSubmit}
+                            disabled={isSubmitting || !promptValue.trim()}
+                            className={`${promptValue.trim().length > 0 && !isSubmitting ? 'bg-white text-black hover:bg-neutral-200' : 'bg-[#737373] text-[#1a1a1a] hover:bg-[#888888]'} w-9 h-9 flex items-center justify-center rounded-full transition-colors ml-1 disabled:cursor-not-allowed`}
+                          >
+                            {isSubmitting
+                              ? <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                              : <ArrowUp size={18} strokeWidth={2} />
+                            }
                           </button>
                         </div>
                       </div>
+                      {submitError && (
+                        <p className="absolute -bottom-6 left-0 text-red-400 text-xs px-2">{submitError}</p>
+                      )}
                     </>
                   )}
                 </>

@@ -15,8 +15,8 @@ export default defineConfig({
       ignored: ['**/.local/**', '**/node_modules/**'],
     },
     proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
+      '/v1': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },

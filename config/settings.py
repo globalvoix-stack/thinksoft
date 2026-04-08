@@ -42,9 +42,11 @@ class Settings(BaseSettings):
     # ── Sandbox ───────────────────────────────────────────────────────────
     e2b_api_key: str
 
-    # ── Auth ──────────────────────────────────────────────────────────────
-    better_auth_secret: str
-    better_auth_url: str
+    # ── Auth (Clerk) ──────────────────────────────────────────────────────
+    clerk_secret_key: str
+    """Clerk secret key — used to fetch JWKS and verify session tokens."""
+    clerk_frontend_api: str
+    """Clerk frontend API URL, e.g. https://your-app.clerk.accounts.dev"""
 
     # ── Monitoring ────────────────────────────────────────────────────────
     sentry_dsn: str = ""

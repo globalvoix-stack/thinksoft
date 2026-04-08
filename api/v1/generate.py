@@ -1,7 +1,6 @@
 """POST /v1/generate — submit a generation job."""
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID, uuid4
 
 import structlog
@@ -10,27 +9,24 @@ from pydantic import BaseModel, Field
 
 from api.auth import get_current_user_id
 from db.pool import acquire
-from db.queries.projects import get_project
+from db.queries.projects import get_project_by_clerk_user
 from modes.router import resolve
-from pipeline.first_prompt import run as first_prompt_run
-from queue.manager import complete as job_complete
-from queue.manager import enqueue, fail as job_fail
-from queue.manager import run_with_timeout, start as job_start
+from queue.manager import enqueue, fail as job_fail, start as job_start
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
 
 class GenerateRequest(BaseModel):
-    project_id: UUID
-    session_id: UUID = Field(default_factory=uuid4)
+    project_id: str
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
     prompt: str = Field(..., min_length=1, max_length=10000)
     mode: str = Field("autonomous", pattern="^(light|autonomous|max)$")
     is_first_prompt: bool = False
 
 
 class GenerateResponse(BaseModel):
-    job_id: UUID
+    job_id: str
     mode: str
     mismatch_suggestion: str | None
 
@@ -42,10 +38,10 @@ async def _run_generation(
     prompt: str,
     mode: str,
 ) -> None:
-    """Background task: run generation pipeline and update job status."""
     try:
         if mode == "light":
             from modes.light.handler import run as light_run
+            from queue.manager import complete as job_complete
             result = await light_run(prompt)
             await job_complete(job_id, {"content": result.content, "model": result.model_used})
         elif mode == "autonomous":
@@ -67,49 +63,36 @@ async def _run_generation(
 async def generate_route(
     body: GenerateRequest,
     background_tasks: BackgroundTasks,
-    user_id: UUID = Depends(get_current_user_id),
+    clerk_user_id: str = Depends(get_current_user_id),
 ) -> GenerateResponse:
-    # Verify project ownership
+    try:
+        project_id = UUID(body.project_id)
+        session_id = UUID(body.session_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
+
     async with acquire() as conn:
-        project = await get_project(conn, body.project_id, user_id)
+        project = await get_project_by_clerk_user(conn, project_id, clerk_user_id)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    # Resolve mode and detect mismatch
     decision = resolve(body.mode, body.prompt, is_first_prompt=body.is_first_prompt)
     effective_mode = decision.mode
 
-    log.info(
-        "api.generate",
-        project_id=str(body.project_id),
-        mode=effective_mode,
-        is_first_prompt=body.is_first_prompt,
-    )
+    log.info("api.generate", project_id=str(project_id), mode=effective_mode, is_first_prompt=body.is_first_prompt)
 
-    # For first prompt, use the full pipeline (always max)
     if body.is_first_prompt:
-        job = await enqueue(body.project_id, body.session_id, "max")
+        from pipeline.first_prompt import run as first_prompt_run
+        job = await enqueue(project_id, session_id, "max")
         await job_start(job.id)
-        background_tasks.add_task(
-            first_prompt_run,
-            body.project_id,
-            body.session_id,
-            body.prompt,
-        )
+        background_tasks.add_task(first_prompt_run, project_id, session_id, body.prompt)
     else:
-        job = await enqueue(body.project_id, body.session_id, effective_mode)
+        job = await enqueue(project_id, session_id, effective_mode)
         await job_start(job.id)
-        background_tasks.add_task(
-            _run_generation,
-            body.project_id,
-            body.session_id,
-            job.id,
-            body.prompt,
-            effective_mode,
-        )
+        background_tasks.add_task(_run_generation, project_id, session_id, job.id, body.prompt, effective_mode)
 
     return GenerateResponse(
-        job_id=job.id,
+        job_id=str(job.id),
         mode=effective_mode,
         mismatch_suggestion=decision.mismatch_suggestion,
     )
