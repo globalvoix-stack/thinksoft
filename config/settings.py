@@ -1,43 +1,59 @@
+"""
+Thinksoft application settings.
+
+Loaded from environment variables / .env file via pydantic-settings.
+Application fails loudly on startup if any required variable is missing.
+"""
+from __future__ import annotations
+
 import logging
 import sys
 from functools import lru_cache
 
 import structlog
 from pydantic import PostgresDsn
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Database
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # ── Database ─────────────────────────────────────────────────────────
     neon_database_url: PostgresDsn
 
-    # AI Models
+    # ── AI Models ─────────────────────────────────────────────────────────
     anthropic_api_key: str
     google_ai_api_key: str
     kimi_api_key: str
     kimi_base_url: str = "https://api.moonshot.ai/v1"
 
-    # Embeddings
+    # ── Embeddings ────────────────────────────────────────────────────────
     voyage_ai_api_key: str
 
-    # Crawling
+    # ── Crawling ──────────────────────────────────────────────────────────
     firecrawl_api_key: str
+    exa_api_key: str = ""
 
-    # Sandbox
+    # ── Sandbox ───────────────────────────────────────────────────────────
     e2b_api_key: str
 
-    # Auth
+    # ── Auth ──────────────────────────────────────────────────────────────
     better_auth_secret: str
     better_auth_url: str
 
-    # App
+    # ── Monitoring ────────────────────────────────────────────────────────
+    sentry_dsn: str = ""
+    resend_api_key: str = ""
+
+    # ── App ───────────────────────────────────────────────────────────────
     app_env: str = "development"
     app_port: int = 8000
     log_level: str = "info"
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 @lru_cache()
@@ -46,15 +62,17 @@ def get_settings() -> Settings:
 
 
 def configure_logging(settings: Settings | None = None) -> None:
-    """Set up structured logging with structlog.
-
-    JSON format in production, human readable in development.
-    Every log entry includes: timestamp, level, and optional context fields
-    (session_id, project_id, agent) where available.
     """
-    log_level_str = (settings.log_level if settings else "info").upper()
+    Configure structlog for structured logging.
+
+    JSON format in production; human-readable ConsoleRenderer in development.
+    Every entry automatically includes timestamp, level, logger name, and any
+    context vars bound via structlog.contextvars (session_id, project_id, agent).
+    """
+    s = settings or get_settings()
+    log_level_str = s.log_level.upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
-    is_production = (settings.app_env if settings else "development") == "production"
+    is_production = s.app_env == "production"
 
     shared_processors: list = [
         structlog.contextvars.merge_contextvars,
@@ -63,12 +81,14 @@ def configure_logging(settings: Settings | None = None) -> None:
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        structlog.processors.ExceptionRenderer(),
     ]
 
-    if is_production:
-        renderer = structlog.processors.JSONRenderer()
-    else:
-        renderer = structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty())
+    renderer = (
+        structlog.processors.JSONRenderer()
+        if is_production
+        else structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty())
+    )
 
     structlog.configure(
         processors=[
@@ -92,11 +112,12 @@ def configure_logging(settings: Settings | None = None) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
 
-    root_logger = logging.getLogger()
-    root_logger.addHandler(handler)
-    root_logger.setLevel(log_level)
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(log_level)
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
-    """Get a structured logger bound to a module name."""
+    """Return a structlog logger bound to a module name."""
     return structlog.get_logger(name)

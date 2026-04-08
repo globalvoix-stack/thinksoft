@@ -1,0 +1,1 @@
+"""Thinksoft API package."""
