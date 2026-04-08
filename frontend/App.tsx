@@ -71,6 +71,8 @@ function NavButtons() {
 function LandingPage() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [prompt, setPrompt] = useState('');
+  const navigate = useNavigate();
+  const { isSignedIn } = useAuth();
 
   const handleVideoEnded = () => {
     setActiveIndex((prev) => (prev + 1) % SCENE_VIDEOS.length);
@@ -78,6 +80,21 @@ function LandingPage() {
 
   const handleFeatureClick = (index: number) => {
     setActiveIndex(index);
+  };
+
+  const handlePromptSubmit = () => {
+    const text = prompt.trim();
+    if (!text) return;
+    if (isSignedIn) {
+      navigate(`/dashboard?prompt=${encodeURIComponent(text)}`);
+    } else {
+      localStorage.setItem('pendingPrompt', text);
+      navigate('/login');
+    }
+  };
+
+  const onPromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handlePromptSubmit(); }
   };
 
   return (
@@ -172,6 +189,7 @@ function LandingPage() {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={onPromptKeyDown}
             className="w-full bg-transparent text-white placeholder-[#A3A3A3] resize-none outline-none text-[15px] flex-1 p-2"
             placeholder="Ask Thinksoft to create a landing page for my..."
             spellCheck={false}
@@ -189,7 +207,7 @@ function LandingPage() {
               <button className="text-[#A3A3A3] hover:text-white transition-colors">
                 <Mic className="w-4 h-4" />
               </button>
-              <button className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ml-1 ${prompt.trim() ? 'bg-white text-[#1A1A1A] hover:bg-gray-200' : 'bg-[#9CA3AF] text-[#1A1A1A] hover:bg-[#D1D5DB]'}`}>
+              <button onClick={handlePromptSubmit} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ml-1 ${prompt.trim() ? 'bg-white text-[#1A1A1A] hover:bg-gray-200' : 'bg-[#9CA3AF] text-[#1A1A1A] hover:bg-[#D1D5DB]'}`}>
                 <ArrowUp className="w-4 h-4" />
               </button>
             </div>

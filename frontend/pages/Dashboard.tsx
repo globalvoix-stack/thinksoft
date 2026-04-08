@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, useUser, useClerk } from '@clerk/clerk-react';
 import { makeApi } from '../lib/api';
 import {
@@ -127,6 +127,7 @@ export default function Dashboard() {
   const { isLoaded, isSignedIn, user } = useUser();
   const { signOut } = useClerk();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -153,27 +154,16 @@ export default function Dashboard() {
   const firstName = user?.firstName || user?.username || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'there';
   const initials = (user?.firstName?.[0] || user?.emailAddresses?.[0]?.emailAddress?.[0] || 'U').toUpperCase();
 
-  const handleSubmit = async () => {
-    const prompt = promptValue.trim();
+  const handleSubmit = async (directPrompt?: string) => {
+    const prompt = (directPrompt ?? promptValue).trim();
     if (!prompt || isSubmitting) return;
     setIsSubmitting(true);
     setSubmitError('');
     try {
       const api = makeApi(() => getToken());
-      // Create project named after the first 60 chars of the prompt
-      const project = await api.projects.create({
-        name: prompt.slice(0, 60),
-        mode: 'max',
-      });
-      // Kick off generation (first prompt → always Max)
-      const gen = await api.generate({
-        project_id: project.id,
-        prompt,
-        mode: 'max',
-        is_first_prompt: true,
-      });
-      // Navigate to the project view with the job ID for SSE streaming
-      navigate(`/projects/${project.id}?job_id=${gen.job_id}`);
+      const project = await api.projects.create({ name: prompt.slice(0, 60), mode: 'max' });
+      const gen = await api.generate({ project_id: project.id, prompt, mode: 'max', is_first_prompt: true });
+      navigate(`/projects/${project.id}?job_id=${gen.job_id}&prompt=${encodeURIComponent(prompt)}`);
     } catch (err: any) {
       setSubmitError(err.message || 'Something went wrong');
       setIsSubmitting(false);
@@ -288,6 +278,18 @@ export default function Dashboard() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Auto-fill and submit prompt arriving from the homepage or login redirect
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    const urlPrompt = searchParams.get('prompt');
+    const storedPrompt = localStorage.getItem('pendingPrompt');
+    const pending = (urlPrompt || storedPrompt || '').trim();
+    if (!pending) return;
+    localStorage.removeItem('pendingPrompt');
+    setPromptValue(pending);
+    handleSubmit(pending);
+  }, [isLoaded, isSignedIn]);
 
   if (!isLoaded) {
     return (
